@@ -60,6 +60,13 @@ Navigator::Navigator(const Ticket& ticket)
   Config* config = engine_->schema()->config();
   LoadConfig(config, "navigator", Horizontal);
   LoadConfig(config, "navigator/vertical", Vertical);
+
+  select_connection_ = engine_->context()->select_notifier().connect(
+      [this](Context* ctx) { OnSelect(ctx); });
+}
+
+Navigator::~Navigator() {
+  select_connection_.disconnect();
 }
 
 ProcessResult Navigator::ProcessKeyEvent(const KeyEvent& key_event) {
@@ -72,6 +79,10 @@ ProcessResult Navigator::ProcessKeyEvent(const KeyEvent& key_event) {
       ctx->get_option("_vertical") ? Vertical : Horizontal;
   return KeyBindingProcessor::ProcessKeyEvent(key_event, ctx, text_orientation,
                                               FallbackOptions::All);
+}
+
+void Navigator::OnSelect(Context* ctx) {
+  spans_.Clear();
 }
 
 bool Navigator::LeftBySyllable(Context* ctx) {
@@ -123,7 +134,7 @@ bool Navigator::End(Context* ctx) {
 }
 
 void Navigator::BeginMove(Context* ctx) {
-  ctx->ConfirmPreviousSelection();
+  ctx->BeginEditing();
   // update spans
   if (input_ != ctx->input() || ctx->caret_pos() > spans_.end()) {
     input_ = ctx->input();

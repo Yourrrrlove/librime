@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.12)
 project(rime)
 set(CMAKE_CXX_STANDARD 17)
 
-set(rime_version 1.10.0)
+set(rime_version 1.12.0)
 set(rime_soversion 1)
 
 add_definitions(-DRIME_VERSION="${rime_version}")
@@ -27,8 +27,8 @@ option(ENABLE_EXTERNAL_PLUGINS "Enable loading of externally built Rime plugins 
 option(ENABLE_THREADING "Enable threading for deployer" ON)
 option(ENABLE_TIMESTAMP "Embed timestamp to schema artifacts" ON)
 
-set(RIME_DATA_DIR "${CMAKE_INSTALL_FULL_DATADIR}/rime-data" CACHE STRING "Target directory for Rime data")
-set(RIME_PLUGINS_DIR "${CMAKE_INSTALL_FULL_LIBDIR}/rime-plugins" CACHE STRING "Target directory for externally built Rime plugins")
+set(RIME_DATA_DIR "rime-data" CACHE STRING "Target directory for Rime data")
+set(RIME_PLUGINS_DIR "rime-plugins" CACHE STRING "Target directory for externally built Rime plugins")
 
 if(WIN32)
   set(ext ".exe")
@@ -80,9 +80,19 @@ if(ENABLE_LOGGING)
   find_package(Glog REQUIRED)
   if(Glog_FOUND)
     include_directories(${Glog_INCLUDE_PATH})
-  endif()
-  if(Glog_STATIC)
-    add_definitions(-DGOOGLE_GLOG_DLL_DECL=)
+    if(WIN32)
+      add_compile_definitions("GLOG_DEPRECATED=__declspec(deprecated)")
+      add_compile_definitions(GLOG_NO_ABBREVIATED_SEVERITIES)
+    else()
+      add_compile_definitions("GLOG_DEPRECATED=__attribute__((deprecated))")
+    endif()
+    if(Glog_STATIC)
+      add_compile_definitions(GLOG_EXPORT=)
+      add_compile_definitions(GLOG_NO_EXPORT=)
+    else()
+      add_compile_definitions("GLOG_EXPORT=__attribute__((visibility(\"default\")))")
+      add_compile_definitions("GLOG_NO_EXPORT=__attribute__((visibility(\"default\")))")
+    endif()
   endif()
 
   set(RIME_ENABLE_LOGGING 1)
@@ -158,6 +168,10 @@ if(MSVC)
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi")
   set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG /OPT:REF /OPT:ICF")
   add_definitions("/wd4244 /wd4996")
+
+  # large address aware
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LARGEADDRESSAWARE")
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /LARGEADDRESSAWARE")
 endif()
 
 if(UNIX)
@@ -190,13 +204,13 @@ configure_file(
 add_custom_target(remove
   COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
 
-if(${CMAKE_SYSTEM_NAME} MATCHES "Linux|FreeBSD|DragonFly|GNU|Darwin" OR MINGW)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux|FreeBSD|OpenBSD|DragonFly|GNU|Darwin" OR MINGW)
   set(prefix "${CMAKE_INSTALL_PREFIX}")
   set(exec_prefix "${CMAKE_INSTALL_PREFIX}")
   set(bindir "${CMAKE_INSTALL_FULL_BINDIR}")
   set(libdir "${CMAKE_INSTALL_FULL_LIBDIR}")
-  set(pkgdatadir "${RIME_DATA_DIR}")
-  set(pluginsdir "${RIME_PLUGINS_DIR}")
+  set(pkgdatadir "${CMAKE_INSTALL_FULL_DATADIR}/${RIME_DATA_DIR}")
+  set(pluginsdir "${CMAKE_INSTALL_FULL_LIBDIR}/${RIME_PLUGINS_DIR}")
   set(includedir "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
   configure_file(
       ${PROJECT_SOURCE_DIR}/rime.pc.in
@@ -210,6 +224,7 @@ install(FILES cmake/RimeConfig.cmake
   DESTINATION ${CMAKE_INSTALL_FULL_DATADIR}/cmake/rime)
 
 file(GLOB rime_public_header_files ${PROJECT_SOURCE_DIR}/src/*.h)
+list(FILTER rime_public_header_files EXCLUDE REGEX .*_impl\.h$)
 install(FILES ${rime_public_header_files}
   DESTINATION ${CMAKE_INSTALL_FULL_INCLUDEDIR})
 if(INSTALL_PRIVATE_HEADERS)
@@ -228,7 +243,7 @@ endif()
 
 if(BUILD_DATA)
   file(GLOB rime_preset_data_files ${PROJECT_SOURCE_DIR}/data/preset/*.yaml)
-  install(FILES ${rime_preset_data_files} DESTINATION ${RIME_DATA_DIR})
+  install(FILES ${rime_preset_data_files} DESTINATION ${CMAKE_INSTALL_FULL_DATADIR}/${RIME_DATA_DIR})
 endif()
 
 if(BUILD_SHARED_LIBS)

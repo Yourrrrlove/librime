@@ -29,8 +29,6 @@
 #include <windows.h>
 #endif
 
-using namespace std::placeholders;
-
 namespace fs = std::filesystem;
 
 namespace rime {
@@ -54,8 +52,8 @@ bool DetectModifications::Run(Deployer* deployer) {
         for (fs::directory_iterator iter(p), end; iter != end; ++iter) {
           path entry(iter->path());
           if (fs::is_regular_file(fs::canonical(entry)) &&
-              entry.extension().string() == ".yaml" &&
-              entry.filename().string() != "user.yaml") {
+              entry.extension().u8string() == ".yaml" &&
+              entry.filename().u8string() != "user.yaml") {
             last_modified =
                 (std::max)(last_modified,
                            filesystem::to_time_t(fs::last_write_time(entry)));
@@ -458,7 +456,7 @@ bool PrebuildAllSchemas::Run(Deployer* deployer) {
   for (fs::directory_iterator iter(shared_data_path), end; iter != end;
        ++iter) {
     path entry(iter->path());
-    if (boost::ends_with(entry.filename().string(), ".schema.yaml")) {
+    if (boost::ends_with(entry.filename().u8string(), ".schema.yaml")) {
       the<DeploymentTask> t(new SchemaUpdate(entry));
       if (!t->Run(deployer))
         success = false;
@@ -523,7 +521,7 @@ bool UserDictSync::Run(Deployer* deployer) {
 }
 
 static bool IsCustomizedCopy(const path& file_path) {
-  auto file_name = file_path.filename().string();
+  auto file_name = file_path.filename().u8string();
   if (boost::ends_with(file_name, ".yaml") &&
       !boost::ends_with(file_name, ".custom.yaml")) {
     Config config;
@@ -550,7 +548,7 @@ bool BackupConfigFiles::Run(Deployer* deployer) {
     path entry(iter->path());
     if (!fs::is_regular_file(entry))
       continue;
-    auto file_extension = entry.extension().string();
+    auto file_extension = entry.extension().u8string();
     bool is_yaml_file = file_extension == ".yaml";
     bool is_text_file = file_extension == ".txt";
     if (!is_yaml_file && !is_text_file)
@@ -590,7 +588,7 @@ bool CleanupTrash::Run(Deployer* deployer) {
     path entry(iter->path());
     if (!fs::is_regular_file(entry))
       continue;
-    auto file_name = entry.filename().string();
+    auto file_name = entry.filename().u8string();
     if (file_name == "rime.log" || boost::ends_with(file_name, ".bin") ||
         boost::ends_with(file_name, ".reverse.kct") ||
         boost::ends_with(file_name, ".userdb.kct.old") ||
@@ -618,7 +616,7 @@ bool CleanupTrash::Run(Deployer* deployer) {
 bool CleanOldLogFiles::Run(Deployer* deployer) {
   bool success = true;
 #ifdef RIME_ENABLE_LOGGING
-  if (FLAGS_logtostderr) {
+  if (FLAGS_logtostderr || FLAGS_log_dir.empty()) {
     return success;
   }
 
@@ -628,32 +626,47 @@ bool CleanOldLogFiles::Run(Deployer* deployer) {
   string today(ymd);
   DLOG(INFO) << "today: " << today;
 
-  vector<string> dirs;
-  // Don't call GetLoggingDirectories as it contains current directory,
-  // which causes permission issue on Android
-  // https://github.com/google/glog/blob/b58718f37cf58fa17f48bf1d576974d133d89839/src/logging.cc#L2410
-  if (FLAGS_log_dir.empty()) {
-    google::GetExistingTempDirectories(&dirs);
-  } else {
-    dirs.push_back(FLAGS_log_dir);
-  }
+  vector<string> dirs(google::GetLoggingDirectories());
+
   DLOG(INFO) << "scanning " << dirs.size() << " temp directory for log files.";
 
   int removed = 0;
+  const string& app_name = deployer->app_name;
   for (const auto& dir : dirs) {
-    vector<path> files;
+    // avoid iteration on non-existing directory, which may cause error
+    if (!fs::exists(fs::path(dir)))
+      continue;
+    vector<path> files_to_remove;
+    set<path> files_in_use;
     DLOG(INFO) << "temp directory: " << dir;
-    // preparing files
-    for (const auto& entry : fs::directory_iterator(dir)) {
-      const string& file_name(entry.path().filename().string());
-      if (entry.is_regular_file() && !entry.is_symlink() &&
-          boost::starts_with(file_name, "rime.") &&
-          !boost::contains(file_name, today)) {
-        files.push_back(entry.path());
+    try {
+      // preparing files
+      for (const auto& entry : fs::directory_iterator(dir)) {
+        const string& file_name(entry.path().filename().u8string());
+        if (entry.is_regular_file() && !entry.is_symlink() &&
+            boost::starts_with(file_name, app_name) &&
+            boost::ends_with(file_name, ".log") &&
+            !boost::contains(file_name, today)) {
+          files_to_remove.push_back(entry.path());
+        } else if (entry.is_symlink()) {
+          auto target = fs::read_symlink(entry.path());
+          const string& target_file_name(target.filename().u8string());
+          if (boost::starts_with(target_file_name, app_name) &&
+              boost::ends_with(target_file_name, ".log")) {
+            files_in_use.insert(target);
+          }
+        }
       }
+    } catch (const fs::filesystem_error& ex) {
+      // Catch error to skip up when we have no sufficient permissions.
+      // E.g. on Android, there's no read permission on the cwd.
+      LOG(WARNING) << "couldn't list directory '" << dir << "': " << ex.what();
+      continue;
     }
     // remove files
-    for (const auto& file : files) {
+    for (const auto& file : files_to_remove) {
+      if (files_in_use.find(file.filename()) != files_in_use.end())
+        continue;
       try {
         DLOG(INFO) << "removing log file '" << file.filename() << "'.";
         // ensure write permission

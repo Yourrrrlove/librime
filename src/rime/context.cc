@@ -4,6 +4,7 @@
 //
 // 2011-05-08 GONG Chen <chen.sst@gmail.com>
 //
+#include <algorithm>
 #include <utility>
 #include <rime/candidate.h>
 #include <rime/context.h>
@@ -11,6 +12,8 @@
 #include <rime/segmentation.h>
 
 namespace rime {
+
+const string kSelectedBeforeEditing = "selected_before_editing";
 
 bool Context::Commit() {
   if (!IsComposing())
@@ -125,12 +128,9 @@ bool Context::Highlight(size_t index) {
   if (composition_.empty() || !composition_.back().menu)
     return false;
   Segment& seg(composition_.back());
-  size_t new_index = index;
   size_t candidate_count = seg.menu->Prepare(index + 1);
-  if (index >= candidate_count) {
-    DLOG(INFO) << "selection index exceeds candidate pool, fallback to last";
-    new_index = candidate_count - 1;
-  }
+  size_t new_index =
+      candidate_count > 0 ? (std::min)(candidate_count - 1, index) : 0;
   size_t previous_index = seg.selected_index;
   if (previous_index == new_index) {
     DLOG(INFO) << "selection has not changed, currently at " << new_index;
@@ -143,27 +143,21 @@ bool Context::Highlight(size_t index) {
   return true;
 }
 
-bool Context::DeleteCandidate(
-    function<an<Candidate>(Segment& seg)> get_candidate) {
+bool Context::DeleteCandidate(size_t index) {
   if (composition_.empty())
     return false;
   Segment& seg(composition_.back());
-  if (auto cand = get_candidate(seg)) {
-    DLOG(INFO) << "Deleting candidate: '" << cand->text();
-    delete_notifier_(this);
-    return true;  // CAVEAT: this doesn't mean anything is deleted for sure
-  }
-  return false;
-}
-
-bool Context::DeleteCandidate(size_t index) {
-  return DeleteCandidate(
-      [index](Segment& seg) { return seg.GetCandidateAt(index); });
+  seg.selected_index = index;
+  DLOG(INFO) << "Deleting candidate: " << seg.GetSelectedCandidate()->text();
+  delete_notifier_(this);
+  return true;  // CAVEAT: this doesn't mean anything is deleted for sure
 }
 
 bool Context::DeleteCurrentSelection() {
-  return DeleteCandidate(
-      [](Segment& seg) { return seg.GetSelectedCandidate(); });
+  if (composition_.empty())
+    return false;
+  Segment& seg(composition_.back());
+  return DeleteCandidate(seg.selected_index);
 }
 
 bool Context::ConfirmCurrentSelection() {
@@ -185,16 +179,20 @@ bool Context::ConfirmCurrentSelection() {
   return true;
 }
 
-bool Context::ConfirmPreviousSelection() {
+void Context::BeginEditing() {
   for (auto it = composition_.rbegin(); it != composition_.rend(); ++it) {
     if (it->status > Segment::kSelected) {
-      return false;
+      return;
     }
     if (it->status == Segment::kSelected) {
-      it->status = Segment::kConfirmed;
-      return true;
+      it->tags.insert(kSelectedBeforeEditing);
+      return;
     }
   }
+}
+
+bool Context::ConfirmPreviousSelection() {
+  BeginEditing();
   return false;
 }
 
@@ -225,6 +223,10 @@ bool Context::ReopenPreviousSelection() {
     if (it->status > Segment::kSelected)
       return false;
     if (it->status == Segment::kSelected) {
+      // do not reopen the previous selection after editing input.
+      if (it->tags.count(kSelectedBeforeEditing) != 0) {
+        return false;
+      }
       while (it != composition_.rbegin()) {
         composition_.pop_back();
       }
@@ -278,6 +280,7 @@ void Context::set_input(const string& value) {
 
 void Context::set_option(const string& name, bool value) {
   options_[name] = value;
+  DLOG(INFO) << "Context::set_option " << name << " = " << value;
   option_update_notifier_(this, name);
 }
 
@@ -303,8 +306,10 @@ string Context::get_property(const string& name) const {
 }
 
 void Context::ClearTransientOptions() {
+  DLOG(INFO) << "Context::ClearTransientOptions";
   auto opt = options_.lower_bound("_");
   while (opt != options_.end() && !opt->first.empty() && opt->first[0] == '_') {
+    DLOG(INFO) << "cleared opption: " << opt->first;
     options_.erase(opt++);
   }
   auto prop = properties_.lower_bound("_");

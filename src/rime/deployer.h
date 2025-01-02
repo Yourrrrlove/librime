@@ -41,10 +41,11 @@ class Deployer : public Messenger {
   string distribution_name;
   string distribution_code_name;
   string distribution_version;
+  string app_name;
   // }
 
-  RIME_API Deployer();
-  RIME_API ~Deployer();
+  RIME_DLL Deployer();
+  RIME_DLL ~Deployer();
 
   bool RunTask(const string& task_name,
                TaskInitializer arg = TaskInitializer());

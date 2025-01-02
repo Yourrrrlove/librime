@@ -22,8 +22,12 @@ an<ConfigItem> ConvertFromYaml(const YAML::Node& yaml_node,
 void EmitYaml(an<ConfigItem> node, YAML::Emitter* emitter, int depth);
 
 ConfigData::~ConfigData() {
-  if (auto_save_ && modified_ && !file_path_.empty())
-    SaveToFile(file_path_);
+  if (auto_save_)
+    Save();
+}
+
+bool ConfigData::Save() {
+  return modified_ && !file_path_.empty() && SaveToFile(file_path_);
 }
 
 bool ConfigData::LoadFromStream(std::istream& stream) {
@@ -62,7 +66,8 @@ bool ConfigData::LoadFromFile(const path& file_path, ConfigCompiler* compiler) {
   modified_ = false;
   root.reset();
   if (!std::filesystem::exists(file_path)) {
-    LOG(WARNING) << "nonexistent config file '" << file_path << "'.";
+    if (!boost::ends_with(file_path.u8string(), ".custom.yaml"))
+      LOG(WARNING) << "nonexistent config file '" << file_path << "'.";
     return false;
   }
   LOG(INFO) << "loading config file '" << file_path << "'.";
@@ -70,7 +75,7 @@ bool ConfigData::LoadFromFile(const path& file_path, ConfigCompiler* compiler) {
     YAML::Node doc = YAML::LoadFile(file_path.string());
     root = ConvertFromYaml(doc, compiler);
   } catch (YAML::Exception& e) {
-    LOG(ERROR) << "Error parsing YAML: " << e.what();
+    LOG(ERROR) << "Error parsing YAML \"" << file_path << "\" : " << e.what();
     return false;
   }
   return true;
